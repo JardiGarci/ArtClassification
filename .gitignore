@@ -1,0 +1,19 @@
+# Datos pesados - no subir al repositorio
+DATA/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# Imágenes sueltas (no son parte del código)
+image.png
+img.jpg
