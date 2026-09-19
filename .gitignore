@@ -17,3 +17,7 @@ __pycache__/
 # Imágenes sueltas (no son parte del código)
 image.png
 img.jpg
+
+*.db
+*.db-wal
+*.db-shm
