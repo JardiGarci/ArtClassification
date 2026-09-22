@@ -1,20 +1,19 @@
 """
-TDA: Análisis Topológico de Datos para imágenes 2D.
+TDA feature extraction pipeline for 2-D grayscale images.
 
-Este módulo implementa el cálculo de homología persistente sobre una
-filtración cubical por niveles de gris, incluyendo:
-- Filtración de H0 (componentes conexas) con 8-conectividad
-- Filtración de H1 (ciclos) via dualidad de Alexander con 4-conectividad
-- Extracción de descriptores topológicos: entropía de persistencia,
-  estadísticas de tiempos de vida y conteo de características
+High-level wrappers around ``tda.py``: given an image (or a pre-segmented
+list of sub-regions), this module runs the H0/H1 persistent homology
+computation and assembles the per-image topological feature dictionary.
 
-La implementación usa Union-Find con compresión de caminos, compilado
-con numba para rendimiento en imágenes de alta resolución.
+The feature vector for each segment includes:
+- H0: persistence entropy, mean/std/max lifetime, component count
+- H1: persistence entropy, mean/std/max lifetime, cycle count
 
-Referencia principal:
-    - Avilés-Rodríguez et al. (2021). Topological Data Analysis for
-      Eye Fundus Image Quality Assessment.
-    - Edelsbrunner & Harer (2010). Computational Topology.
+References
+----------
+Avilés-Rodríguez et al. (2021). Topological Data Analysis for Eye Fundus
+    Image Quality Assessment.
+Edelsbrunner & Harer (2010). Computational Topology.
 """
 
 import numpy as np
@@ -44,7 +43,7 @@ def find(parent, x):
         Raíz del componente.
     """
     while parent[x] != x:
-        parent[x] = parent[parent[x]]  # Compresión de caminos
+        parent[x] = parent[parent[x]]  # Path compression
         x = parent[x]
     return x
 
@@ -86,7 +85,7 @@ def union(parent, birth, death, a, b, level):
 
 
 # =============================================================================
-# Descriptores topológicos
+# Descriptors topológicos
 # =============================================================================
 
 @njit

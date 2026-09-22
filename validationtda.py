@@ -15,11 +15,12 @@ import matplotlib.pyplot as plt
 
 def generate_hollow_squares_v2(size=256, n_squares=4, square_size=40, border=5):
     """
-    Marcos huecos con fondo=30, borde=180, interior=80.
-    Tres niveles de intensidad garantizan que la filtración
-    forme ciclos al rodear el interior con el borde.
+    Generate hollow square frames with three intensity levels.
+
+    Background=30, border=180, interior=80. Three distinct levels
+    guarantee that the filtration forms cycles around each interior.
     """
-    img = np.full((size, size), 30, dtype=np.int64)  # Fondo gris oscuro
+    img = np.full((size, size), 30, dtype=np.int64)  # Dark grey background
     np.random.seed(42)
 
     positions = []
@@ -39,17 +40,19 @@ def generate_hollow_squares_v2(size=256, n_squares=4, square_size=40, border=5):
 
         if len(positions) == k + 1:
             x, y = positions[-1]
-            img[x:x + square_size, y:y + square_size] = 180       # Borde
+            img[x:x + square_size, y:y + square_size] = 180       # Border
             img[x + border:x + square_size - border,
-                y + border:y + square_size - border] = 80          # Interior
+                y + border:y + square_size - border] = 80          # Interior fill
 
     return img
 
 
 def generate_nested_circles_v2(size=256):
     """
-    Fondo=20, anillo=180, disco interior=80.
-    El anillo rodea al disco con intensidad diferente en ambos lados.
+    Generate a concentric ring image with three intensity levels.
+
+    Background=20, ring=180, inner disc=80. The ring surrounds the
+    disc with a different intensity on each side, ensuring cycles form.
     """
     img = np.full((size, size), 20, dtype=np.int64)
     cx, cy = size // 2, size // 2

@@ -1,32 +1,82 @@
+"""
+Multifractal analysis pipeline for 2D images.
+
+This module implements two complementary multifractal methods:
+
+  - **MF-DFA** (Multifractal Detrended Fluctuation Analysis): estimates the
+    generalised Hurst exponent h(q) by partitioning the image into overlapping
+    windows from all four corners, locally detrending with a 2-D polynomial fit
+    (orders 1–3), and computing the fluctuation function F_q(s) across scales.
+
+  - **MF-Rényi**: computes the multifractal spectrum via the box-counting
+    partition function Χ_q(s) applied to three box-level measures (intensity
+    sum, variance, Shannon entropy), yielding the generalised Rényi dimensions
+    D_q and the singularity spectrum f(α).
+
+Both methods return a 14-feature vector describing the shape of the multifractal
+spectrum (width Δα, asymmetry index, Hurst exponent, τ(q) curvature, etc.).
+A combined entry point `mf_combined_features` runs both analyses in a single
+scale loop for efficiency.
+
+All inner loops are compiled with numba (@njit, parallel=True) for CPU
+performance. Typical extraction time on a 1380×1380 image is under 5 s.
+
+References
+----------
+Kantelhardt et al. (2002). Multifractal detrended fluctuation analysis.
+Gu & Zhou (2006). Detrended fluctuation analysis for fractals and multifractals
+    in higher dimensions.
+Ihlen (2012). Introduction to Multifractal Detrended Fluctuation Analysis.
+"""
+
 import numpy as np
 from numba import njit, prange
 import utils as ut
 
 # =============================================================================
-# Partición en ventanas desde las 4 esquinas
+# Window partitioning from four corners
 # =============================================================================
 
 @njit
 def idxy_4(img_shape, s):
+    """
+    Generate s×s window top-left coordinates covering the image from all
+    four corners.
 
+    When image dimensions are not exact multiples of s, windows anchored
+    at the four corners are added to cover boundary residuals, following
+    the standard 2-D MF-DFA tiling procedure.
+
+    Parameters
+    ----------
+    img_shape : tuple (nx, ny)
+        Image height and width in pixels.
+    s : int
+        Window side length in pixels.
+
+    Returns
+    -------
+    idxy : ndarray (n, 2), dtype int32
+        Array of [i0, j0] top-left corner coordinates for each window.
+    """
     nx, ny = img_shape
-    rx = int((nx % s) != 0)  # 1 si hay residuo en filas
-    ry = int((ny % s) != 0)  # 1 si hay residuo en columnas
+    rx = int((nx % s) != 0)  # 1 if there is a row residual
+    ry = int((ny % s) != 0)  # 1 if there is a column residual
 
-    # Número total de ventanas considerando las 4 orientaciones
+    # Total windows accounting for 4 orientations
     n = (nx // s) * (ny // s) * (1 + rx + ry + (rx * ry))
  
     idxy = np.zeros((n, 2), dtype=np.int32)
     idx = 0
 
-    # Esquina superior izquierda → (arriba-abajo, izquierda-derecha)
+    # Top-left corner → (top-to-bottom, left-to-right)
     for i in range(0, nx - (s * rx), s):
         for j in range(0, ny - (s * ry), s):
             idxy[idx, 0] = i
             idxy[idx, 1] = j
             idx += 1
 
-    # Esquina superior derecha → (arriba-abajo, derecha-izquierda)
+    # Top-right corner → (top-to-bottom, right-to-left)
     if ry != 0:
         for i in range(0, nx - (s * rx), s):
             for j in range(ny - (s * ry), 0, -s):
@@ -34,7 +84,7 @@ def idxy_4(img_shape, s):
                 idxy[idx, 1] = j
                 idx += 1
 
-    # Esquina inferior izquierda → (abajo-arriba, izquierda-derecha)
+    # Bottom-left corner → (bottom-to-top, left-to-right)
     if rx != 0:
         for i in range(nx - (s * rx), 0, -s):
             for j in range(0, ny - (s * ry), s):
@@ -42,7 +92,7 @@ def idxy_4(img_shape, s):
                 idxy[idx, 1] = j
                 idx += 1
 
-        # Esquina inferior derecha → (abajo-arriba, derecha-izquierda)
+        # Bottom-right corner → (bottom-to-top, right-to-left)
         if ry != 0:
             for i in range(nx - (s * rx), 0, -s):
                 for j in range(ny - (s * ry), 0, -s):
@@ -55,7 +105,29 @@ def idxy_4(img_shape, s):
 
 @njit(fastmath=True)
 def poly2d_fluctuation_order1(img, i0, j0, s, integration=True):
-    """MF-DFA1: detrending lineal (3 coeficientes: i, j, 1)."""
+    """
+    MF-DFA order 1: compute local fluctuation with linear (planar) detrending.
+
+    Fits a 2-D polynomial of degree 1 (3 coefficients: i, j, 1) to the
+    integrated profile inside the s×s window and returns the RMS residual.
+
+    Parameters
+    ----------
+    img : ndarray (H, W)
+        Input image (integrated profile or raw, depending on `integration`).
+    i0, j0 : int
+        Top-left corner of the window.
+    s : int
+        Window side length in pixels.
+    integration : bool
+        If True, compute the 2-D cumulative sum inside the window before
+        fitting (standard DFA). If False, fit directly to pixel values.
+
+    Returns
+    -------
+    float
+        Root mean squared fluctuation after detrending.
+    """
     n = s * s
     Y = np.zeros((s, s), dtype=np.float64)
 
@@ -81,7 +153,7 @@ def poly2d_fluctuation_order1(img, i0, j0, s, integration=True):
             for dj in range(s):
                 Y[di, dj] = img[i0 + di, j0 + dj]
 
-    # 3 coeficientes: a*i + b*j + c
+    # 3 coefficients: a*i + b*j + c
     A = np.zeros((3, 3), dtype=np.float64)
     b = np.zeros(3, dtype=np.float64)
 
@@ -133,21 +205,43 @@ def poly2d_fluctuation_order1(img, i0, j0, s, integration=True):
 
 @njit(fastmath=True)
 def poly2d_fluctuation_order2(img, i0, j0, s, integration=True):
+    """
+    MF-DFA order 2: compute local fluctuation with quadratic detrending.
 
+    Fits a 2-D polynomial of degree 2 (6 coefficients: i², j², ij, i, j, 1)
+    to the integrated profile and returns the RMS residual. This is the
+    default order used in the pipeline.
+
+    Parameters
+    ----------
+    img : ndarray (H, W)
+        Input image.
+    i0, j0 : int
+        Top-left corner of the window.
+    s : int
+        Window side length in pixels.
+    integration : bool
+        If True, apply 2-D cumulative summation before fitting.
+
+    Returns
+    -------
+    float
+        Root mean squared fluctuation after quadratic detrending.
+    """
     n = s * s
 
-    # --- Paso 1: Integración local (suma acumulada dentro de la ventana) ---
+    # --- Step 1: Local integration (2-D cumulative sum inside the window) ---
     Y = np.zeros((s, s), dtype=np.float64)
 
     if integration:
-        # Sustraer media local
+        # Subtract local mean
         mean_val = 0.0
         for di in range(s):
             for dj in range(s):
                 mean_val += img[i0 + di, j0 + dj]
         mean_val /= n
 
-        # Suma acumulada 2D local
+        # Local 2-D cumulative sum
         for di in range(s):
             for dj in range(s):
                 val = img[i0 + di, j0 + dj] - mean_val
@@ -159,12 +253,12 @@ def poly2d_fluctuation_order2(img, i0, j0, s, integration=True):
                 if di > 0 and dj > 0:
                     Y[di, dj] -= Y[di - 1, dj - 1]
     else:
-        # Sin integración: usar valores directos
+        # No integration: use raw pixel values
         for di in range(s):
             for dj in range(s):
                 Y[di, dj] = img[i0 + di, j0 + dj]
 
-    # --- Paso 2: Detrending polinomial de segundo orden ---
+    # --- Step 2: Second-order polynomial detrending ---
     A = np.zeros((6, 6), dtype=np.float64)
     b = np.zeros(6, dtype=np.float64)
 
@@ -237,7 +331,7 @@ def poly2d_fluctuation_order2(img, i0, j0, s, integration=True):
                     A[i, j] -= f * A[k, j]
                 b[i] -= f * b[k]
 
-    # --- Paso 3: Residuos y RMSE ---
+    # --- Step 3: Residuals and RMSE ---
     res = 0.0
     for di in range(s):
         for dj in range(s):
@@ -251,7 +345,7 @@ def poly2d_fluctuation_order2(img, i0, j0, s, integration=True):
 
 @njit(fastmath=True)
 def poly2d_fluctuation_order3(img, i0, j0, s, integration=True):
-    """MF-DFA3: detrending cúbico (10 coeficientes)."""
+    """MF-DFA order 3: local fluctuation with cubic detrending (10 coefficients)."""
     n = s * s
     Y = np.zeros((s, s), dtype=np.float64)
 
@@ -345,7 +439,32 @@ def poly2d_fluctuation_order3(img, i0, j0, s, integration=True):
 
 
 @njit(parallel=True, fastmath=True)
-def local_fluctuation(Y, idxy, s, integration = True, degree_trend = 2):
+def local_fluctuation(Y, idxy, s, integration=True, degree_trend=2):
+    """
+    Compute the local fluctuation F(u,w,s) for every window in parallel.
+
+    Dispatches to the appropriate polynomial detrending order (1, 2, or 3)
+    for each window defined by `idxy`.
+
+    Parameters
+    ----------
+    Y : ndarray (H, W)
+        Image (raw or pre-integrated profile).
+    idxy : ndarray (n, 2), dtype int32
+        Top-left corners of all windows.
+    s : int
+        Window size.
+    integration : bool
+        Passed through to the polynomial fluctuation functions.
+    degree_trend : int
+        Polynomial order for detrending (1 = planar, 2 = quadratic,
+        3 = cubic).
+
+    Returns
+    -------
+    F_uw : ndarray (n,)
+        Per-window RMS fluctuations.
+    """
     n = idxy.shape[0]
     F_uw = np.zeros(n)
     for k in prange(n):
@@ -360,15 +479,34 @@ def local_fluctuation(Y, idxy, s, integration = True, degree_trend = 2):
     return F_uw
 
 
-# # =============================================================================
-# # Función de fluctuación generalizada Fq(s)
-# # =============================================================================
+# =============================================================================
+# Generalised fluctuation function F_q(s)
+# =============================================================================
 
 @njit(parallel=True, fastmath=True)
 def mf_fluctuation(f_loc, qs):
+    """
+    Compute the generalised fluctuation function F_q(s) for all orders q.
+
+    For q ≠ 0: F_q = (mean(F^q))^(1/q).
+    For q = 0: geometric mean (limit as q → 0).
+    Degenerate windows with zero fluctuation are excluded before averaging.
+
+    Parameters
+    ----------
+    f_loc : ndarray (n,)
+        Per-window RMS fluctuations from `local_fluctuation`.
+    qs : ndarray (nq,)
+        Moment orders q.
+
+    Returns
+    -------
+    Fq : ndarray (nq,)
+        Generalised fluctuation function evaluated at each q.
+    """
     nq = qs.shape[0]
     n = f_loc.shape[0]
-    # Omitir fluctuaciones nulas (ventanas degeneradas)
+    # Skip degenerate windows (zero fluctuation)
     n_0 = 0
     for i in range(n):
         if f_loc[i] > 0:
@@ -400,7 +538,7 @@ def mf_fluctuation(f_loc, qs):
 
 
 # =============================================================================
-# MF-DFA completo con extracción de características
+# Full MF-DFA with feature extraction
 # =============================================================================
 
 def mf_dfa_features(
@@ -410,15 +548,53 @@ def mf_dfa_features(
     s_min=6,
     s_max=0.1,
     integration=True,
-    degree_trend = 2,
-    degree_scales = 2,
+    degree_trend=2,
+    degree_scales=2,
 ):
+    """
+    Run the full 2-D MF-DFA pipeline and extract 14 spectral features.
 
-    # ---- Valores de q ----
+    Steps
+    -----
+    1. Build a log-spaced scale sequence between s_min and s_max.
+    2. For each scale s, tile the image from four corners and compute F_q(s).
+    3. Fit log F_q vs. log s to obtain the generalised Hurst exponent h(q).
+    4. Derive τ(q) and the singularity spectrum f(α) via Legendre transform.
+    5. Extract 14 descriptors from the spectrum shape.
+
+    Parameters
+    ----------
+    img : ndarray (H, W)
+        Grayscale image, normalised to 1380×1380 by `utils.normalize_image`.
+    q_min, q_max : float
+        Range of moment orders. Default [-5, 5].
+    s_min : int or float
+        Minimum scale. Integer → pixels; float → fraction of min(H, W).
+    s_max : int or float
+        Maximum scale. Integer → pixels; float → fraction of min(H, W).
+    integration : bool
+        Apply 2-D cumulative integration before detrending (standard DFA).
+    degree_trend : int
+        Polynomial order for local detrending (1–3). Default: 2.
+    degree_scales : int
+        Density of the log-spaced scale sequence (see `utils.bineo`).
+
+    Returns
+    -------
+    data : dict
+        Full spectrum arrays: 'alpha', 'f_alpha', 'hq', 'tq', 'qs',
+        's_sizes', 'fluctuations'.
+    features : dict
+        14 scalar descriptors:
+        a_max, a_min, dif_a (Δα), a_star (α*), dif_L (left arm),
+        dif_R (right arm), asy_i (asymmetry index), f_max, f_min,
+        dif_f, a/b/c (quadratic τ(q) fit coefficients), Hurst.
+    """
+    # ---- Moment orders q ----
     # qs = np.array(ut.vals_Qs(q_n=q_min, q_p=q_max))
     qs = np.arange(q_min - 0.5,q_max + 0.75,0.25)
 
-    # ---- Escalas ----
+    # ---- Scale sequence ----
     img_shape = img.shape
     if type(s_min) == int:
         if type(s_max) == int:
@@ -438,7 +614,7 @@ def mf_dfa_features(
     ns = scales.shape[0]
 
     Fqs = np.zeros((nq, ns), dtype=np.float64)
-    F_s = []  # Para el Hurst clásico (q=2)
+    F_s = []  # Classic fluctuation (q=2) for the Hurst exponent
 
     # ---- MF-DFA: fluctuaciones por escala ----
     for is_, s in enumerate(scales):
@@ -447,32 +623,32 @@ def mf_dfa_features(
 
         f_loc = local_fluctuation(Y, idxy, int(s), integration = integration, degree_trend=degree_trend)
 
-        # Fluctuación generalizada para todos los q
+        # Generalised fluctuation for all q
         Fqs[:, is_] = mf_fluctuation(f_loc, qs)
 
-        # Fluctuación clásica (q=2) para el exponente de Hurst
+        # Classic fluctuation (q=2) for the Hurst exponent
         f_s = float(np.sqrt(np.mean(np.power(f_loc, 2))))
         F_s.append(f_s)
 
-    # ---- Exponente de Hurst clásico ----
+    # ---- Classic Hurst exponent (q=2) ----
     vals = np.polyfit(np.log(scales), np.log(F_s), deg=1)
 
-    # ---- h(q): exponente de Hurst generalizado ----
+    # ---- h(q): generalised Hurst exponent ----
     log_s = np.log(scales)
     hq = np.zeros(nq, dtype=np.float64)
     for iq in range(nq):
         coeffs = np.polyfit(log_s, np.log(Fqs[iq, :]), 1)
         hq[iq] = coeffs[0]
 
-    # ---- τ(q): función de masa ----
-    D = 2.0  # Dimensión del espacio (imagen 2D)
+    # ---- τ(q): mass exponent function ----
+    D = 2.0  # Embedding dimension (2-D image)
     tau_q = qs * hq - D
 
-    # ---- Espectro multifractal f(α) via transformada de Legendre ----
+    # ---- Multifractal spectrum f(α) via Legendre transform ----
     alpha = np.gradient(tau_q, qs)       # α(q) = dτ/dq
-    f_alpha = qs * alpha - tau_q         # f(α) = q·α - τ(q)
+    f_alpha = qs * alpha - tau_q         # f(α) = q·α − τ(q)
 
-    # ---- Empaquetar datos completos ----
+    # ---- Pack full spectrum data ----
     data = {
         'alpha': np.array(alpha)[2:-2],
         'f_alpha': np.array(f_alpha)[2:-2],
@@ -484,27 +660,27 @@ def mf_dfa_features(
     }
 
 
-    # ---- Extracción de 14 características ----
+    # ---- Extract 14 spectral features ----
 
-    # Extremos y ancho del espectro
-    a_max = data['alpha'][0]          # Extremo derecho (q más negativo)
-    a_min = data['alpha'][-1]         # Extremo izquierdo (q más positivo)
-    dif_a = np.abs(a_max - a_min)     # Ancho total Δα
+    # Spectrum endpoints and width
+    a_max = data['alpha'][0]          # Right endpoint (most negative q)
+    a_min = data['alpha'][-1]         # Left endpoint (most positive q)
+    dif_a = np.abs(a_max - a_min)     # Total width Δα
 
-    # Posición del máximo
+    # Position of the spectral maximum
     a_star = data['alpha'][data['f_alpha'] == np.max(data['f_alpha'])][0]
 
-    # Asimetría del espectro
-    dif_L = np.abs(a_star - a_min)    # Brazo izquierdo
-    dif_R = np.abs(a_max - a_star)    # Brazo derecho
-    asy_i = (dif_L - dif_R) / (dif_L + dif_R)  # Índice de asimetría
+    # Spectrum asymmetry
+    dif_L = np.abs(a_star - a_min)    # Left arm
+    dif_R = np.abs(a_max - a_star)    # Right arm
+    asy_i = (dif_L - dif_R) / (dif_L + dif_R)  # Asymmetry index
 
-    # Alturas del espectro
-    f_max = data['f_alpha'][0]        # Altura en α_max
-    f_min = data['f_alpha'][-1]       # Altura en α_min
+    # Spectrum heights
+    f_max = data['f_alpha'][0]        # Height at α_max
+    f_min = data['f_alpha'][-1]       # Height at α_min
     dif_f = np.abs(np.max(data['f_alpha']) - np.min(data['f_alpha']))
 
-    # Ajuste cuadrático de τ(q): captura la curvatura global
+    # Quadratic fit of τ(q): captures the global curvature
     a, b, c = np.polyfit(data['qs'], data['tq'], 2)
 
     features = {
@@ -540,7 +716,7 @@ def measures_int(idxy, img, s):
         x = idxy[k, 0]
         y = idxy[k, 1]
 
-        # Un solo recorrido: suma, suma de cuadrados e histograma
+        # Single pass: accumulate sum, sum-of-squares and histogram
         sum_val = 0.0
         sum_sq = 0.0
         counts = np.zeros(256, dtype=np.int64)
@@ -557,14 +733,14 @@ def measures_int(idxy, img, s):
                     idx = 255
                 counts[idx] += 1
 
-        # Intensidad
+        # Intensity
         intensity[k] = sum_val
 
-        # Varianza: E[X²] - E[X]²
+        # Variance: E[X²] − E[X]²
         mean_val = sum_val / n_pixels
         variance[k] = sum_sq / n_pixels - mean_val * mean_val
 
-        # Entropía de Shannon normalizada
+        # Normalised Shannon entropy
         n_unique = 0
         for u in range(256):
             if counts[u] > 0:
@@ -598,7 +774,7 @@ def measures(idxy, img, s):
         x = idxy[k, 0]
         y = idxy[k, 1]
  
-        # --- Un solo recorrido: suma, suma de cuadrados y valores ---
+        # --- Single pass: sum, sum-of-squares and values ---
         sum_val = 0.0
         sum_sq = 0.0
         values = np.zeros(n_pixels, dtype=np.float64)
@@ -612,15 +788,15 @@ def measures(idxy, img, s):
                 values[idx] = val
                 idx += 1
  
-        # Intensidad
+        # Intensity
         intensity[k] = sum_val
  
-        # Varianza: E[X²] - E[X]²
+        # Variance: E[X²] − E[X]²
         mean_val = sum_val / n_pixels
         variance[k] = sum_sq / n_pixels - mean_val * mean_val
  
-        # --- Entropía de Shannon ---
-        # Contar valores únicos con búsqueda lineal
+        # --- Shannon entropy ---
+        # Count unique values with linear search (numba-compatible)
         unique_vals = np.zeros(n_pixels, dtype=np.float64)
         unique_counts = np.zeros(n_pixels, dtype=np.int64)
         n_unique = 0
@@ -692,12 +868,11 @@ def mf_renyi_features(
     degree_scales = 2
 ):
 
-    # ---- Valores de q ----
-    # qs = np.array(ut.vals_Qs(q_n=q_min, q_p=q_max))
+    # ---- Moment orders q ----
     qs = np.arange(q_min - 0.25, q_max + 0.25, 0.25)
     nq = len(qs)
 
-    # ---- Escalas ----
+    # ---- Scale sequence ----
     img_shape = img.shape
     if type(s_min) == int:
         if type(s_max) == int:
@@ -711,12 +886,12 @@ def mf_renyi_features(
     # scales = ut.bineo(s_min, int(min(img.shape) * s_max), degree=2)
     ns = len(scales)
 
-    # Matrices de función de partición para cada métrica
+    # Partition function matrices for each intensity measure
     chi_sum = np.zeros((nq, ns), dtype=np.float64)
     chi_var = np.zeros((nq, ns), dtype=np.float64)
     chi_ent = np.zeros((nq, ns), dtype=np.float64)
 
-    # ---- Calcular función de partición por escala ----
+    # ---- Compute partition function per scale ----
     for is_, s in enumerate(scales):
         xy = idxy(img_shape=img_shape, s=int(s))
         xy = np.ascontiguousarray(xy, dtype=np.int32)
@@ -725,18 +900,18 @@ def mf_renyi_features(
         else:
             Sum, Var, Ent = measures(idxy=xy, img=img, s=int(s))
 
-        # Normalizar a probabilidad (excluir valores <= 0)
+        # Normalise to probability measure (exclude non-positive values)
         p_sum = _normalize(Sum)
         p_var = _normalize(Var)
         p_ent = _normalize(Ent)
 
-        # Función de partición para cada q
+        # Partition function for each q
         chi_sum[:, is_] = _partition_function(p_sum, qs)
         chi_var[:, is_] = _partition_function(p_var, qs)
         chi_ent[:, is_] = _partition_function(p_ent, qs)
 
 
-    # ---- Obtener espectros y características por métrica ----
+    # ---- Compute spectrum and features for each measure ----
     log_s = np.log(scales)
 
     data = {}
@@ -882,7 +1057,7 @@ def _extract_features(alpha, f_alpha, Dq, qs, tq):
 
 
 # =============================================================================
-# Helpers compartidos para la función combinada
+# Shared helpers for the combined analysis
 # =============================================================================
 
 def _compute_scales(img, s_min, s_max, degree_scales):
@@ -961,7 +1136,7 @@ def _postprocess_renyi_sum(chi_sum, qs, scales):
 
 
 # =============================================================================
-# Análisis multifractal combinado: MF-DFA + MF-Rényi (solo suma)
+# Combined multifractal analysis: MF-DFA + MF-Rényi (intensity sum only)
 # =============================================================================
 
 def mf_combined_features(
@@ -990,14 +1165,14 @@ def mf_combined_features(
     for is_, s in enumerate(scales):
         s_int = int(s)
 
-        # MF-DFA: ventanas desde las 4 esquinas con detrending polinomial
+        # MF-DFA: four-corner windows with polynomial detrending
         idxy4 = idxy_4(img_shape, s_int)
         idxy4 = np.ascontiguousarray(idxy4, dtype=np.int32)
         f_loc = local_fluctuation(Y, idxy4, s_int, integration=integration, degree_trend=degree_trend)
         Fqs[:, is_] = mf_fluctuation(f_loc, qs_dfa)
         F_s.append(float(np.sqrt(np.mean(np.power(f_loc, 2)))))
 
-        # MF-Rényi: grilla simple, solo métrica suma
+        # MF-Rényi: regular grid, intensity sum measure only
         xy = idxy(img_shape, s_int)
         xy = np.ascontiguousarray(xy, dtype=np.int32)
         Sum = measures_sum_only(xy, img, s_int)

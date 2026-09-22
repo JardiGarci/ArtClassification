@@ -1,20 +1,24 @@
 """
-MF-DFA 2D: Análisis de Fluctuaciones Detendenciadas Multifractal Bidimensional.
+MF-DFA 2D — Multifractal Detrended Fluctuation Analysis for images.
 
-Este módulo implementa el método MF-DFA adaptado para imágenes 2D, incluyendo:
-- Construcción del perfil integrado 2D
-- Partición en ventanas desde las 4 esquinas
-- Ajuste de tendencia polinomial local de segundo orden
-- Cálculo de la función de fluctuación generalizada
-- Obtención del espectro multifractal f(α) mediante transformada de Legendre
-- Extracción de 14 características del espectro
+This module implements the full 2-D MF-DFA pipeline, including:
+- 2-D integrated profile (double cumulative sum)
+- Four-corner window partitioning to handle boundary residuals
+- Local second-order polynomial detrending
+- Generalised fluctuation function F_q(s)
+- Multifractal spectrum f(α) via Legendre transform
+- Extraction of 14 spectral descriptors
 
-Referencias principales:
-    - Kantelhardt et al. (2002). Multifractal detrended fluctuation analysis.
-    - Gu & Zhou (2006). Detrended fluctuation analysis for fractals and 
-      multifractals in higher dimensions.
-    - Ihlen (2012). Introduction to Multifractal Detrended Fluctuation 
-      Analysis in Matlab.
+This is the lower-level, image-by-image implementation.
+For batch feature extraction see ``multifractal_functions.mf_dfa_features``.
+
+References
+----------
+Kantelhardt et al. (2002). Multifractal detrended fluctuation analysis.
+Gu & Zhou (2006). Detrended fluctuation analysis for fractals and
+    multifractals in higher dimensions.
+Ihlen (2012). Introduction to Multifractal Detrended Fluctuation
+    Analysis in Matlab.
 """
 
 import numpy as np
@@ -25,30 +29,29 @@ import utils as ut
 
 
 # =============================================================================
-# Perfil integrado 2D
+# 2-D Integrated profile
 # =============================================================================
 
 @njit
 def profile_2d(img):
     """
-    Construye la superficie acumulada (perfil integrado) de una imagen.
+    Build the integrated profile (cumulative surface) of an image.
 
-    Implementa la suma acumulada doble con media sustraída:
-        Y(i,j) = Σ_{k≤i} Σ_{l≤j} [I(k,l) - mean(I)]
+    Computes the double cumulative sum with mean subtraction:
+        Y(i,j) = Σ_{k≤i} Σ_{l≤j} [I(k,l) − mean(I)]
 
-    Esta integración transforma la imagen (señal tipo ruido) en una
-    superficie tipo caminata aleatoria, condición necesaria para la
-    aplicación del DFA (Ihlen, 2012).
+    This integration transforms the image (noise-like signal) into a
+    random-walk surface, a prerequisite for DFA (Ihlen, 2012).
 
     Parameters
     ----------
     img : ndarray (n, m)
-        Imagen de entrada en escala de grises.
+        Input grayscale image.
 
     Returns
     -------
     Y : ndarray (n, m)
-        Perfil integrado 2D.
+        2-D integrated profile.
     """
     img = img - np.mean(img)
     n, m = img.shape
@@ -67,17 +70,16 @@ def profile_2d(img):
 
 
 # =============================================================================
-# Partición en ventanas desde las 4 esquinas
+# Four-corner window partitioning
 # =============================================================================
 
 @njit
 def idxy_4(img_shape, s):
     """
-    Genera índices de ventanas s×s cubriendo la imagen desde las 4 esquinas.
+    Generate s×s window indices covering the image from all four corners.
 
-    Cuando las dimensiones de la imagen no son múltiplo exacto de s,
-    las ventanas se inician desde las 4 esquinas para cubrir los
-    residuos. Esto sigue el procedimiento estándar de MF-DFA que
+    When image dimensions are not exact multiples of s, windows started
+    from the four corners cover the boundary residuals. This follows the
     evita perder información en los bordes.
 
     Parameters
@@ -631,7 +633,7 @@ def mf_dfa_features(
 
         f_loc = local_fluctuation(Y, idxy, int(s), integration = integration, degree_trend=degree_trend)
 
-        # Fluctuación generalizada para todos los q
+        # Generalised fluctuation para todos los q
         Fqs[:, is_] = mf_fluctuation(f_loc, qs)
 
         # Fluctuación clásica (q=2) para el exponente de Hurst
@@ -649,7 +651,7 @@ def mf_dfa_features(
         hq[iq] = coeffs[0]
 
     # ---- τ(q): función de masa ----
-    D = 2.0  # Dimensión del espacio (imagen 2D)
+    D = 2.0  # Embedding dimension (imagen 2D)
     tau_q = qs * hq - D
 
     # ---- Espectro multifractal f(α) via transformada de Legendre ----
@@ -672,25 +674,25 @@ def mf_dfa_features(
 
     # ---- Extracción de 14 características ----
 
-    # Extremos y ancho del espectro
+    # Spectrum endpoints and width
     a_max = data['alpha'][0]          # Extremo derecho (q más negativo)
     a_min = data['alpha'][-1]         # Extremo izquierdo (q más positivo)
     dif_a = np.abs(a_max - a_min)     # Ancho total Δα
 
-    # Posición del máximo
+    # Position of the spectral maximum
     a_star = data['alpha'][data['f_alpha'] == np.max(data['f_alpha'])][0]
 
-    # Asimetría del espectro
-    dif_L = np.abs(a_star - a_min)    # Brazo izquierdo
-    dif_R = np.abs(a_max - a_star)    # Brazo derecho
-    asy_i = (dif_L - dif_R) / (dif_L + dif_R)  # Índice de asimetría
+    # Spectrum asymmetry
+    dif_L = np.abs(a_star - a_min)    # Left arm
+    dif_R = np.abs(a_max - a_star)    # Right arm
+    asy_i = (dif_L - dif_R) / (dif_L + dif_R)  # Asymmetry index
 
-    # Alturas del espectro
+    # Spectrum heights
     f_max = data['f_alpha'][0]        # Altura en α_max
     f_min = data['f_alpha'][-1]       # Altura en α_min
     dif_f = np.abs(np.max(data['f_alpha']) - np.min(data['f_alpha']))
 
-    # Ajuste cuadrático de τ(q): captura la curvatura global
+    # Quadratic fit of τ(q): captura la curvatura global
     a, b, c = np.polyfit(data['qs'], data['tq'], 2)
 
     features = {

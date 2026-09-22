@@ -1,3 +1,26 @@
+"""
+MF-Rényi — Multifractal analysis via Rényi dimensions for 2-D images.
+
+This module implements box-counting multifractal analysis using three
+intensity measures computed per box:
+
+- **sum**: total pixel intensity (first moment).
+- **variance**: spatial heterogeneity within the box.
+- **entropy**: Shannon entropy of the pixel intensity histogram.
+
+For each measure the partition function Χ_q(s) is built across scales,
+and the generalised Rényi dimensions D_q and the singularity spectrum
+f(α) are derived. Fourteen spectral descriptors are returned per measure
+(42 features total: D0, D1, D2, Δα, α*, asymmetry index, etc.).
+
+All per-box computations are compiled with numba (@njit, parallel=True).
+
+References
+----------
+Hentschel & Procaccia (1983). The infinite number of generalised dimensions
+    of fractals and strange attractors.
+Wang (2025). Rényi dimensions for artwork authenticity.
+"""
 import numpy as np
 import utils as ut
 from numba import njit, prange
@@ -7,30 +30,30 @@ from numba import njit, prange
 @njit(parallel=True, fastmath=True)
 def measures(idxy, img, s):
     """
-    Calcula tres métricas de masa para cada caja de tamaño s×s:
-    suma de intensidades, varianza y entropía de Shannon normalizada.
+    Compute three intensity measures for every s×s box in parallel:
+    intensity sum, variance, and normalised Shannon entropy.
 
-    Optimizado: un solo recorrido de píxeles por caja acumula
-    suma, suma de cuadrados e histograma simultáneamente.
-    La varianza se obtiene por E[X²] - E[X]².
+    A single pixel pass per box simultaneously accumulates the sum,
+    sum-of-squares, and intensity histogram.
+    Variance is derived as E[X²] − E[X]².
 
     Parameters
     ----------
     idxy : ndarray (n, 2)
-        Coordenadas (i0, j0) de cada caja.
+        Top-left (i0, j0) coordinates for each box.
     img : ndarray (H, W)
-        Imagen en escala de grises.
+        Grayscale image.
     s : int
-        Tamaño de la caja en píxeles.
+        Box side length in pixels.
 
     Returns
     -------
     intensity : ndarray (n,)
-        Suma de intensidades en cada caja.
+        Sum of pixel intensities per box.
     variance : ndarray (n,)
-        Varianza de intensidades en cada caja.
+        Pixel intensity variance per box.
     entropy : ndarray (n,)
-        Entropía de Shannon normalizada en [0, 1].
+        Normalised Shannon entropy per box (range [0, 1]).
     """
     n = len(idxy)
     n_pixels = s * s
@@ -43,7 +66,7 @@ def measures(idxy, img, s):
         x = idxy[k, 0]
         y = idxy[k, 1]
 
-        # Un solo recorrido: suma, suma de cuadrados e histograma
+        # Single pass: sum, sum-of-squares and histogram
         sum_val = 0.0
         sum_sq = 0.0
         counts = np.zeros(256, dtype=np.int64)
@@ -63,11 +86,11 @@ def measures(idxy, img, s):
         # Intensidad
         intensity[k] = sum_val
 
-        # Varianza: E[X²] - E[X]²
+        # Variance: E[X²] − E[X]²
         mean_val = sum_val / n_pixels
         variance[k] = sum_sq / n_pixels - mean_val * mean_val
 
-        # Entropía de Shannon normalizada
+        # Shannon entropy normalizada
         n_unique = 0
         for u in range(256):
             if counts[u] > 0:

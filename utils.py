@@ -1,27 +1,44 @@
+"""
+Image preprocessing and shared utility functions.
+
+This module provides the image normalisation and segmentation pipeline used
+across MF-DFA and TDA analysis, as well as helper functions for scale
+generation and multifractal moment sampling.
+
+Key functions
+-------------
+normalize_image   : Resize to a fixed square canvas with reflective padding.
+segment_image     : Split a normalised image into a grid of sub-regions.
+preprocess_image  : End-to-end preprocessing pipeline (read → normalise → segment).
+bineo             : Generate log-spaced scales for multifractal analysis.
+vals_Qs           : Non-uniform q-moment sequence, denser near q = 0.
+binomial_cascade_2d : 2-D binomial multiplicative cascade (synthetic benchmark).
+"""
+
 import cv2
 import numpy as np
 from numba import njit
  
 def normalize_image(img, max_size=1380, gray = True):
     """
-    Normaliza una imagen a max_size x max_size píxeles.
-    
-    Procedimiento:
-    1. Redimensiona preservando relación de aspecto (solo reducción).
-    2. Rellena el espacio restante mediante reflexión de bordes.
+    Normalise an image to a square canvas of max_size × max_size pixels.
+
+    Procedure:
+    1. Downscale while preserving the aspect ratio (reduction only).
+    2. Pad the remaining space with border reflection.
     
     Parameters
     ----------
     img : ndarray
         Imagen en escala de grises (H, W) o color (H, W, C).
     max_size : int
-        Tamaño objetivo. Por defecto 1380, elegido por ser cercano a la
-        dimensión mínima del dataset y divisible entre 1, 2, 3 y 4.
+        Target size. Default 1380, chosen to be close to the minimum
+        image dimension in the dataset and divisible by 1, 2, 3 and 4.
     
     Returns
     -------
     img_norm : ndarray
-        Imagen de tamaño (max_size, max_size) o (max_size, max_size, C).
+        Normalised image of shape (max_size, max_size) or (max_size, max_size, C).
     """
     if img.ndim == 2:
         h, w = img.shape
@@ -30,7 +47,7 @@ def normalize_image(img, max_size=1380, gray = True):
     else:
         raise ValueError("La imagen debe ser 2D o 3D.")
  
-    # Escalar preservando aspecto (solo reducción)
+    # Downscale preserving aspect ratio
     if h >= w:
         new_h = max_size
         new_w = int(w * max_size / h)
@@ -44,7 +61,7 @@ def normalize_image(img, max_size=1380, gray = True):
         interpolation=cv2.INTER_AREA
     )
  
-    # Padding simétrico por reflexión
+    # Symmetric reflective padding
     pad_top = (max_size - new_h) // 2
     pad_bottom = max_size - new_h - pad_top
     pad_left = (max_size - new_w) // 2
@@ -63,22 +80,21 @@ def normalize_image(img, max_size=1380, gray = True):
  
 def segment_image(img, grid_size=1):
     """
-    Divide una imagen en una cuadrícula de grid_size x grid_size secciones.
+    Split an image into a grid_size × grid_size grid of sub-regions.
     
     Parameters
     ----------
     img : ndarray
-        Imagen 2D (H, W) o 3D (H, W, C). Se espera que las dimensiones
-        sean divisibles entre grid_size (garantizado si max_size=1380).
+        2-D (H, W) or 3-D (H, W, C) image. Dimensions must be divisible
+        by grid_size (guaranteed when max_size=1380).
     grid_size : int
-        Número de divisiones por lado. Valores válidos: 1, 2, 3 o 4,
-        que producen 1, 4, 9 o 16 secciones respectivamente.
+        Divisions per side. Valid values: 1, 2, 3 or 4, producing
+        1, 4, 9 or 16 sub-regions respectively.
     
     Returns
     -------
     segments : list of ndarray
-        Lista de secciones en orden fila-mayor (izquierda a derecha,
-        arriba a abajo).
+        Sub-regions in row-major order (left-to-right, top-to-bottom).
     """
     if grid_size < 1:
         raise ValueError("grid_size debe ser >= 1.")
@@ -112,27 +128,27 @@ def segment_image(img, grid_size=1):
  
 def preprocess_image(img_path, max_size=1380, grid_sizes=(1, 2, 3, 4)):
     """
-    Pipeline completo de preprocesamiento para una imagen.
+    End-to-end preprocessing pipeline for a single painting.
     
     Parameters
     ----------
     img_path : str
-        Ruta a la imagen.
+        Path to the image file.
     max_size : int
-        Tamaño de normalización.
+        Normalisation target size.
     grid_sizes : tuple of int
-        Tamaños de cuadrícula para segmentación.
+        Grid sizes to apply during segmentation.
     
     Returns
     -------
     results : dict
-        Diccionario con clave 'grid_{n}' para cada grid_size,
-        donde el valor es una lista de secciones (ndarrays en escala de grises).
+        Dictionary with key 'grid_{n}' for each grid size, where the
+        value is a list of grayscale sub-region arrays.
     """
-    # Leer en escala de grises
+    # Read as grayscale
     img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
     if img is None:
-        raise FileNotFoundError(f"No se pudo leer la imagen: {img_path}")
+        raise FileNotFoundError(f"Could not read image: {img_path}")
  
     # Normalizar
     img_norm = normalize_image(img, max_size=max_size)
@@ -146,44 +162,44 @@ def preprocess_image(img_path, max_size=1380, grid_sizes=(1, 2, 3, 4)):
     return results
 
 # =============================================================================
-# Funciones auxiliares
+# Auxiliary functions
 # =============================================================================
 
 def sub_mean(x):
-    """Sustrae la media de un arreglo."""
+    """Subtract the mean from an array."""
     return x - np.mean(x)
 
 
 @njit
 def bineo(s_min, s_max, degree=1):
     """
-    Genera una secuencia de escalas espaciadas logarítmicamente.
+    Generate a log-spaced sequence of scales.
 
-    El espaciado se controla mediante raíces progresivas de 2:
-    degree=1 usa √2 ≈ 1.414 (espaciado amplio),
-    degree=2 usa 2^(1/4) ≈ 1.189 (intermedio),
-    degree=3 usa 2^(1/8) ≈ 1.091 (denso, más puntos para regresión).
+    Spacing is controlled by progressive square roots of 2:
+    degree=1 uses √2 ≈ 1.414 (coarse), degree=2 uses 2^(1/4) ≈ 1.189
+    (medium), degree=3 uses 2^(1/8) ≈ 1.091 (dense, more points for
+    regression).
 
     Parameters
     ----------
     s_min : int
-        Escala mínima en píxeles.
+        Minimum scale in pixels.
     s_max : int
-        Escala máxima en píxeles.
+        Maximum scale in pixels.
     degree : int
-        Controla la densidad del muestreo. Valores mayores generan
-        más escalas intermedias.
+        Controls sampling density. Larger values produce more
+        intermediate scales.
 
     Returns
     -------
     N_s : ndarray
-        Arreglo de escalas enteras.
+        Array of integer scales.
     """
     s = s_min
     val = 2
     N_s = []
     for i in range(1, degree + 1):
-        val = np.sqrt(val)  # Raíz progresiva: degree=3 → 2^(1/8)
+        val = np.sqrt(val)  # Progressive root: degree=3 → 2^(1/8)
     while s < s_max:
         N_s.append(s)
         s = int(s * val) + 1
@@ -191,7 +207,7 @@ def bineo(s_min, s_max, degree=1):
 
 
 def valor_cercano(lista, valor):
-    """Encuentra el valor más cercano a 'valor' dentro de 'lista'."""
+    """Return the element in `lista` closest to `valor`."""
     lista = np.array(lista)
     resta = np.abs(lista - valor)
     return lista[resta == min(resta)]
@@ -199,24 +215,24 @@ def valor_cercano(lista, valor):
 
 def vals_Qs(q_n, q_p):
     """
-    Genera valores de q con muestreo no uniforme.
+    Generate non-uniformly spaced q-moment values.
 
-    Los valores son más densos cerca de q=0, donde h(q) presenta
-    mayor variación, y más espaciados hacia los extremos. Esto mejora
-    la resolución del espectro multifractal en la zona de transición
-    entre fluctuaciones débiles (q<0) y fuertes (q>0).
+    Values are denser near q = 0, where h(q) varies most rapidly,
+    and sparser toward the extremes. This improves spectral resolution
+    in the transition zone between weak (q < 0) and strong (q > 0)
+    fluctuations.
 
     Parameters
     ----------
     q_n : float
-        Extremo negativo del rango de momentos (ej. -5.0).
+        Negative extreme of the moment range (e.g. -5.0).
     q_p : float
-        Extremo positivo del rango de momentos (ej. 5.0).
+        Positive extreme of the moment range (e.g. 5.0).
 
     Returns
     -------
     Qs : list of float
-        Valores de q ordenados de menor a mayor.
+        q-moment values sorted in ascending order.
     """
     cuts = ([float(0)]
             + [float(i) for i in bineo(s_min=0.25, s_max=q_p, degree=3)]
@@ -229,7 +245,7 @@ def vals_Qs(q_n, q_p):
     i_min = l.index(valor_cercano(l, np.abs(q_n)))
     i_max = l.index(valor_cercano(l, q_p))
 
-    # Rama negativa (espejo de la positiva)
+    # Negative branch (mirror of the positive branch)
     l_min = [ll * -1 for ll in l[1:i_min]]
     l_min.reverse()
 

@@ -1,20 +1,23 @@
 """
-TDA: Análisis Topológico de Datos para imágenes 2D.
+TDA — Topological Data Analysis for 2-D grayscale images.
 
-Este módulo implementa el cálculo de homología persistente sobre una
-filtración cubical por niveles de gris, incluyendo:
-- Filtración de H0 (componentes conexas) con 8-conectividad
-- Filtración de H1 (ciclos) via dualidad de Alexander con 4-conectividad
-- Extracción de descriptores topológicos: entropía de persistencia,
-  estadísticas de tiempos de vida y conteo de características
+This module computes persistent homology over a greyscale cubical filtration:
 
-La implementación usa Union-Find con compresión de caminos, compilado
-con numba para rendimiento en imágenes de alta resolución.
+- **H0** (connected components): 8-connectivity, filtration from dark to bright.
+- **H1** (cycles / loops): 4-connectivity via Alexander duality on the
+  complement image.
 
-Referencia principal:
-    - Avilés-Rodríguez et al. (2021). Topological Data Analysis for
-      Eye Fundus Image Quality Assessment.
-    - Edelsbrunner & Harer (2010). Computational Topology.
+For each homology dimension the module extracts topological descriptors:
+persistence entropy, lifetime statistics, and feature counts.
+
+All inner loops are compiled with numba (@njit) for performance on
+1380×1380 images.
+
+References
+----------
+Avilés-Rodríguez et al. (2021). Topological Data Analysis for Eye Fundus
+    Image Quality Assessment.
+Edelsbrunner & Harer (2010). Computational Topology.
 """
 
 import numpy as np
@@ -28,23 +31,23 @@ from numba import njit
 @njit
 def find(parent, x):
     """
-    Encuentra la raíz del componente al que pertenece x,
-    con compresión de caminos para eficiencia amortizada O(α(n)).
+    Find the root of the component containing x,
+    with path compression for amortised O(α(n)) efficiency.
 
     Parameters
     ----------
     parent : ndarray
-        Arreglo de padres de la estructura Union-Find.
+        Parent array of the Union-Find structure.
     x : int
-        Índice del elemento a buscar.
+        Index of the element to look up.
 
     Returns
     -------
     int
-        Raíz del componente.
+        Root of the component.
     """
     while parent[x] != x:
-        parent[x] = parent[parent[x]]  # Compresión de caminos
+        parent[x] = parent[parent[x]]  # Path compression
         x = parent[x]
     return x
 
@@ -52,24 +55,24 @@ def find(parent, x):
 @njit
 def union(parent, birth, death, a, b, level):
     """
-    Fusiona dos componentes aplicando la regla del más viejo.
+    Merge two components using the elder rule.
 
-    El componente con nacimiento más temprano (más viejo) sobrevive,
-    y el más joven muere en el nivel de filtración actual. Esto
-    garantiza que el tiempo de vida refleje la persistencia real.
+    The component born earlier (older) survives; the younger one dies
+    at the current filtration level. This ensures that lifetimes
+    correctly reflect topological persistence.
 
     Parameters
     ----------
     parent : ndarray
-        Arreglo de padres.
+        Parent array.
     birth : ndarray
-        Nivel de nacimiento de cada componente.
+        Birth level of each component.
     death : ndarray
-        Nivel de muerte de cada componente (-1 si aún vivo).
+        Death level of each component (-1 if still alive).
     a, b : int
-        Índices de los elementos a fusionar.
+        Indices of the elements to merge.
     level : int
-        Nivel de filtración actual (momento de la muerte).
+        Current filtration level (moment of death).
     """
     ra = find(parent, a)
     rb = find(parent, b)
@@ -86,7 +89,7 @@ def union(parent, birth, death, a, b, level):
 
 
 # =============================================================================
-# Descriptores topológicos
+# Topological descriptors
 # =============================================================================
 
 @njit
@@ -467,7 +470,7 @@ def tda_features(img, step=5):
      h1_entropy, h1_mean, h1_std, h1_max, h1_n,
      h0_lifetimes, h1_lifetimes) = result
 
-    # Normalizar media y max por el rango de gris para comparabilidad
+    # Normalise media y max por el rango de gris para comparabilidad
     # entre imágenes con diferentes rangos dinámicos
     gray_range = float(np.max(img) - np.min(img))
     if gray_range == 0:
