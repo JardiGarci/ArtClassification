@@ -43,35 +43,40 @@ for i, item in enumerate(dataset):
 # Features
 
 features_names_dfa = ['a_max','a_min','dif_a','a_star','dif_L','dif_R','asy_i','f_max','f_min','dif_f','a','b','c','Hurst']
-cols_dfa = ", ".join(f'"{c}" REAL' for c in [f'{name_feat}/seg{grid}{pos+1}' for grid in range(1, 4) for pos in range(grid**2) for name_feat in features_names_dfa])
+cols_dfa_b1 = ", ".join(f'"{c}" REAL' for c in [f'{name_feat}/seg{grid}{pos+1}/b1' for grid in range(1, 4) for pos in range(grid**2) for name_feat in features_names_dfa])
+cols_dfa_b2 = ", ".join(f'"{c}" REAL' for c in [f'{name_feat}/seg{grid}{pos+1}/b2' for grid in range(1, 4) for pos in range(grid**2) for name_feat in features_names_dfa])
+
+
 
 features_names_renyi = ['a_max','a_min','dif_a','a_star','dif_L','dif_R','asy_i','f_max','f_min','dif_f','D0','D1','D2']
-cols_renyi = ", ".join(f'"{c}" REAL' for c in [f'{name_feat}/seg{grid}{pos+1}' for grid in range(1, 4) for pos in range(grid**2) for name_feat in features_names_renyi])
+cols_renyi_b1 = ", ".join(f'"{c}" REAL' for c in [f'{name_feat}/seg{grid}{pos+1}/b1' for grid in range(1, 4) for pos in range(grid**2) for name_feat in features_names_renyi])
+cols_renyi_b2 = ", ".join(f'"{c}" REAL' for c in [f'{name_feat}/seg{grid}{pos+1}/b2' for grid in range(1, 4) for pos in range(grid**2) for name_feat in features_names_renyi])
+
 
 con.executescript(f"""
     DROP TABLE IF EXISTS mfdfa_b1;
     CREATE TABLE mfdfa_b1 (
         image_id INTEGER NOT NULL PRIMARY KEY,
-        {cols_dfa}
+        {cols_dfa_b1}
     );
 
     DROP TABLE IF EXISTS mfdfa_b2;
         CREATE TABLE mfdfa_b2 (
             image_id INTEGER NOT NULL PRIMARY KEY,
-            {cols_dfa}
+            {cols_dfa_b2}
         );
     
     
     DROP TABLE IF EXISTS mfrenyi_b1;
         CREATE TABLE mfrenyi_b1 (
             image_id INTEGER NOT NULL PRIMARY KEY,
-            {cols_renyi}
+            {cols_renyi_b1}
         );
     
         DROP TABLE IF EXISTS mfrenyi_b2;
             CREATE TABLE mfrenyi_b2 (
                 image_id INTEGER NOT NULL PRIMARY KEY,
-                {cols_renyi}
+                {cols_renyi_b2}
             );
 
 """)
