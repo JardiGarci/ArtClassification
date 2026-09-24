@@ -21,3 +21,4 @@ img.jpg
 *.db
 *.db-wal
 *.db-shm
+test.ipynb
