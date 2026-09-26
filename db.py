@@ -124,3 +124,53 @@ def insert_features(con, table, painting_id, features, commit=True):
     )
     if commit:
         con.commit()
+
+# =============================================================================
+# Extraction bookkeeping
+# =============================================================================
+
+def create_extraction_log(con):
+    """Per painting, per method and band: whether extraction finished or failed."""
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS extraction_log (
+            painting_id INTEGER NOT NULL,
+            method      TEXT    NOT NULL,
+            band        TEXT    NOT NULL,
+            status      TEXT    NOT NULL CHECK (status IN ('ok', 'error')),
+            error       TEXT,
+            updated_at  TEXT    NOT NULL,
+            PRIMARY KEY (painting_id, method, band)
+        )
+    """)
+    con.execute("""
+        CREATE INDEX IF NOT EXISTS ix_log_status
+        ON extraction_log (method, band, status)
+    """)
+    con.commit()
+
+
+def log_extraction(con, painting_id, method, band, status, error=None, commit=True):
+    """Record the outcome of one painting. Replaces any previous entry."""
+    con.execute(
+        "INSERT OR REPLACE INTO extraction_log"
+        " (painting_id, method, band, status, error, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, datetime('now'))",
+        (painting_id, method, band, status,
+         None if error is None else str(error)[:500]),
+    )
+    if commit:
+        con.commit()
+
+
+def done_painting_ids(con, table):
+    """Painting ids already present in a feature table."""
+    return {row[0] for row in con.execute(f'SELECT painting_id FROM "{table}"')}
+
+
+def failed_painting_ids(con, method, band):
+    """Painting ids whose last attempt ended in error."""
+    return {row[0] for row in con.execute(
+        "SELECT painting_id FROM extraction_log"
+        " WHERE method = ? AND band = ? AND status = 'error'",
+        (method, band),
+    )}
