@@ -149,7 +149,8 @@ def mf_renyi_features(
     q_min=-5.0,
     q_max=5.0,
     s_min=6,
-    s_max=0.1
+    s_max=0.1,
+    degree_scales=2,
 ):
     """
     Calcula las dimensiones generalizadas de Rényi y el espectro
@@ -178,6 +179,11 @@ def mf_renyi_features(
         Escala mínima en píxeles.
     s_max : float
         Escala máxima como fracción de la dimensión menor.
+        s_min y s_max aceptan pixeles (int) o fracción del lado menor
+        (float), igual que mfdfa.mf_dfa_features.
+    degree_scales : int
+        Densidad de la escalera logarítmica (ver utils.bineo):
+        1 usa √2, 2 usa 2^(1/4).
 
     Returns
     -------
@@ -198,7 +204,7 @@ def mf_renyi_features(
 
     # ---- Escalas ----
     img_shape = img.shape
-    scales = ut.bineo(s_min, int(min(img.shape) * s_max), degree=2)
+    scales = scale_ladder(img.shape, s_min, s_max, degree_scales)
     ns = len(scales)
 
     # Matrices de función de partición para cada métrica
@@ -249,6 +255,21 @@ def mf_renyi_features(
         # break
 
     return data, features
+
+
+def scale_ladder(img_shape, s_min, s_max, degree_scales=2):
+    """
+    Escalas en pixeles para un segmento de tamaño img_shape.
+
+    Un int se interpreta como pixeles y un float como fracción del
+    lado menor, la misma convención que mfdfa.mf_dfa_features.
+    """
+    side = min(img_shape)
+
+    def to_px(v):
+        return int(v) if isinstance(v, (int, np.integer)) else int(side * v)
+
+    return ut.bineo(to_px(s_min), to_px(s_max), degree=degree_scales)
 
 
 def _normalize(masses):

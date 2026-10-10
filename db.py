@@ -6,8 +6,12 @@ DB_PATH = "data.db"
 FEATURES_DFA = ['a_max','a_min','dif_a','a_star','dif_L','dif_R','asy_i',
                 'f_max','f_min','dif_f','a','b','c','Hurst']
 
-FEATURES_RENYI = ['a_max','a_min','dif_a','a_star','dif_L','dif_R','asy_i',
+# MF-Rényi returns the same 13 spectral descriptors for each of three box
+# measures: intensity sum, variance and Shannon entropy (39 per segment).
+RENYI_SPECTRUM = ['a_max','a_min','dif_a','a_star','dif_L','dif_R','asy_i',
                   'f_max','f_min','dif_f','D0','D1','D2']
+RENYI_MEASURES = ['sum', 'var', 'ent']
+FEATURES_RENYI = [f'{m}_{f}' for m in RENYI_MEASURES for f in RENYI_SPECTRUM]
 
 
 def connect(db_path=DB_PATH):
